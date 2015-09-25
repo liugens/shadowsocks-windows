@@ -93,7 +93,7 @@ namespace Shadowsocks.Controller
                 {
                     EndPoint remoteEndPoint = new IPEndPoint(IPAddress.Any, 0);
                     int bytesRead = _remote.EndReceiveFrom(ar, ref remoteEndPoint);
-
+                    Console.WriteLine("UDP recv {0} bytes", bytesRead);
                     byte[] dataOut = new byte[bytesRead];
                     int outlen;
 
@@ -103,16 +103,23 @@ namespace Shadowsocks.Controller
                     byte[] sendBuf = new byte[outlen + 3];
                     Array.Copy(dataOut, 0, sendBuf, 3, outlen);
 
+                    StringBuilder sb = new StringBuilder();
+                    for (int i = 0; i < outlen; i++)
+                        sb.Append(dataOut[i].ToString("x") + " ");
+                    Console.WriteLine(sb.ToString());
+
                     _local.SendTo(sendBuf, outlen + 3, 0, _localEndPoint);
                     Receive();
                 }
-                catch (ObjectDisposedException)
+                catch (ObjectDisposedException e)
                 {
                     // TODO: handle the ObjectDisposedException
+                    Logging.LogUsefulException(e);
                 }
-                catch (Exception)
+                catch (Exception e)
                 {
                     // TODO: need more think about handle other Exceptions, or should remove this catch().
+                    Logging.LogUsefulException(e);
                 }
                 finally
                 {

@@ -13,7 +13,6 @@ namespace Shadowsocks.Controller.Strategy
         private readonly ShadowsocksController _controller;
         private Server _currentServer;
         private readonly Timer _timer;
-        private Dictionary<string, List<AvailabilityStatistics.RawStatisticsData>> _filteredStatistics;
         private int ChoiceKeptMilliseconds
             => (int) TimeSpan.FromMinutes(_controller.StatisticsConfiguration.ChoiceKeptMinutes).TotalMilliseconds;
 
@@ -30,48 +29,39 @@ namespace Shadowsocks.Controller.Strategy
         {
             Logging.Debug("Reloading statistics and choose a new server....");
             var servers = _controller.GetCurrentConfiguration().configs;
-            LoadStatistics();
             ChooseNewServer(servers);
-        }
-
-        private void LoadStatistics()
-        {
-            _filteredStatistics = _controller.availabilityStatistics.RawStatistics ?? _filteredStatistics ?? new Dictionary<string, List<AvailabilityStatistics.RawStatisticsData>>();
         }
 
         //return the score by data
         //server with highest score will be choosen
-        private float GetScore(string serverName)
+        private float GetScore(string serverName, AvailabilityStatistics.StatisticsData st)
         {
             var config = _controller.StatisticsConfiguration;
-            List<AvailabilityStatistics.RawStatisticsData> dataList;
-            if (_filteredStatistics == null || !_filteredStatistics.TryGetValue(serverName, out dataList)) return 0;
-            var successTimes = (float) dataList.Count(data => data.ICMPStatus.Equals(IPStatus.Success.ToString()));
-            var timedOutTimes = (float) dataList.Count(data => data.ICMPStatus.Equals(IPStatus.TimedOut.ToString()));
-            var statisticsData = new AvailabilityStatistics.StatisticsData
-            {
-                PackageLoss = timedOutTimes/(successTimes + timedOutTimes)*100,
-                AverageResponse = Convert.ToInt32(dataList.Average(data => data.RoundtripTime)),
-                MinResponse = dataList.Min(data => data.RoundtripTime),
-                MaxResponse = dataList.Max(data => data.RoundtripTime)
-            };
+            if (st == null)
+                return 0;
+            var successTimes = st.packageTotal - st.packageLoss;
+            var timedOutTimes = st.packageTimeout;
+            float loss = timedOutTimes * 100 / (successTimes + timedOutTimes);
+            int avg = st.roundtripTimeTotal / successTimes;
             float factor;
             float score = 0;
             if (!config.Calculations.TryGetValue("PackageLoss", out factor)) factor = 0;
-            score += statisticsData.PackageLoss*factor;
+            score += loss * factor;
             if (!config.Calculations.TryGetValue("AverageResponse", out factor)) factor = 0;
-            score += statisticsData.AverageResponse*factor;
+            score += avg * factor;
             if (!config.Calculations.TryGetValue("MinResponse", out factor)) factor = 0;
-            score += statisticsData.MinResponse*factor;
+            score += st.minRoundtripTime * factor;
             if (!config.Calculations.TryGetValue("MaxResponse", out factor)) factor = 0;
-            score += statisticsData.MaxResponse*factor;
-            Logging.Debug($"{serverName}  {SimpleJson.SimpleJson.SerializeObject(statisticsData)}");
+            score += st.maxRoundtripTime * factor;
+            Logging.Debug($"{serverName}  {SimpleJson.SimpleJson.SerializeObject(st)}");
             return score;
         }
 
         private void ChooseNewServer(List<Server> servers)
         {
-            if (_filteredStatistics == null || servers.Count == 0)
+            Dictionary<string, AvailabilityStatistics.StatisticsData> statistics
+                = _controller.availabilityStatistics?.Statistics;
+            if (statistics == null || servers.Count == 0)
             {
                 return;
             }
@@ -79,11 +69,12 @@ namespace Shadowsocks.Controller.Strategy
             {
                 var bestResult = (from server in servers
                                   let name = server.FriendlyName()
-                                  where _filteredStatistics.ContainsKey(name)
+                                  let st = statistics[name]
+                                  where statistics.ContainsKey(name)
                                   select new
                                   {
                                       server,
-                                      score = GetScore(name)
+                                      score = GetScore(name, st)
                                   }
                                   ).Aggregate((result1, result2) => result1.score > result2.score ? result1 : result2);
 

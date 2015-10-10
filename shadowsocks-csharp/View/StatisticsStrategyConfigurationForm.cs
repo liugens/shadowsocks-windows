@@ -8,6 +8,9 @@ using Shadowsocks.Controller;
 using Shadowsocks.Model;
 using SimpleJson;
 using System.Net.NetworkInformation;
+using Microsoft.VisualBasic.FileIO;
+using System.IO;
+using System.ComponentModel;
 
 namespace Shadowsocks.View
 {
@@ -23,9 +26,20 @@ namespace Shadowsocks.View
             if (controller == null) return;
             InitializeComponent();
             _controller = controller;
-            _controller.ConfigChanged += (sender, args) => LoadConfiguration();
+            _controller.ConfigChanged += _controller_ConfigChanged;
             LoadConfiguration();
             Load += (sender, args) => InitData();
+        }
+
+        private void _controller_ConfigChanged(object sender, EventArgs e)
+        {
+            LoadConfiguration();
+        }
+
+        protected override void OnClosing(CancelEventArgs e)
+        {
+            _controller.ConfigChanged -= _controller_ConfigChanged;
+            base.OnClosing(e);
         }
 
         private void LoadConfiguration()
@@ -49,11 +63,11 @@ namespace Shadowsocks.View
                 calculationContainer.Controls.Add(calculation);
             }
 
-            serverSelector.DataSource = _servers;
-
             _dataTable.Columns.Add("Timestamp", typeof (DateTime));
             _dataTable.Columns.Add("Package Loss", typeof (int));
             _dataTable.Columns.Add("Ping", typeof (int));
+
+            serverSelector.DataSource = _servers;
 
             StatisticsChart.Series["Package Loss"].XValueMember = "Timestamp";
             StatisticsChart.Series["Package Loss"].YValueMembers = "Package Loss";
@@ -63,7 +77,6 @@ namespace Shadowsocks.View
             loadChartData();
             StatisticsChart.DataBind();
         }
-
 
         private void CancelButton_Click(object sender, EventArgs e)
         {
@@ -85,34 +98,90 @@ namespace Shadowsocks.View
         {
             string serverName = _servers[serverSelector.SelectedIndex];
             _dataTable.Rows.Clear();
-            List<AvailabilityStatistics.RawStatisticsData> statistics;
-            if (!_controller.availabilityStatistics.FilteredStatistics.TryGetValue(serverName, out statistics)) return;
-            IEnumerable<IGrouping<int, AvailabilityStatistics.RawStatisticsData>> dataGroups;
+            Dictionary<int, AvailabilityStatistics.StatisticsData> dataGroups
+                = new Dictionary<int, AvailabilityStatistics.StatisticsData>();
+
+            try
+            {
+                var path = AvailabilityStatistics.AvailabilityStatisticsFile;
+                Logging.Debug($"loading statistics from {path}");
+                if (!File.Exists(path))
+                    return;
+                using (TextFieldParser parser = new TextFieldParser(path))
+                {
+                    parser.SetDelimiters(new string[] { "," });
+                    parser.HasFieldsEnclosedInQuotes = true;
+                    string[] colFields = parser.ReadFields(); // skip first line
+                    while (!parser.EndOfData)
+                    {
+                        string[] fields = parser.ReadFields();
+                        int roundtripTime;
+                        int.TryParse(fields[3], out roundtripTime);
+                        string geolocation = fields.Length > 4 ? fields[4] : null;
+                        string isp = fields.Length > 5 ? fields[5] : null;
+
+                        AvailabilityStatistics.PingReply reply = new AvailabilityStatistics.PingReply()
+                        {
+                            timestamp = AvailabilityStatistics.ParseExactOrUnknown(fields[0]),
+                            serverName = fields[1],
+                            status = fields[2],
+                            roundtripTime = roundtripTime,
+                            geolocation = geolocation,
+                            isp = isp
+                        };
+
+                        int key;
+                        if (allMode.Checked)
+                            key = reply.timestamp.DayOfYear;
+                        else
+                            key = reply.timestamp.Hour;
+
+                        AvailabilityStatistics.StatisticsData st;
+                        if (dataGroups.ContainsKey(key))
+                            st = dataGroups[key];
+                        else
+                        {
+                            st = new AvailabilityStatistics.StatisticsData()
+                            {
+                                timestamp = reply.timestamp
+                            };
+                            dataGroups.Add(key, st);
+                        }
+                        st.packageTotal++;
+                        if (reply.status == IPStatus.Success.ToString())
+                        {
+                            st.roundtripTimeTotal += reply.roundtripTime;
+                        }
+                        else
+                        {
+                            st.packageLoss++;
+                            if (reply.status == IPStatus.TimedOut.ToString())
+                                st.packageTimeout++;
+                        }
+                    }
+                }
+            }
+            catch (Exception e)
+            {
+                Logging.LogUsefulException(e);
+                return;
+            }
+
             if (allMode.Checked)
             {
-                dataGroups = statistics.GroupBy(data => data.Timestamp.DayOfYear);
                 StatisticsChart.ChartAreas["DataArea"].AxisX.LabelStyle.Format = "MM/dd/yyyy";
                 StatisticsChart.ChartAreas["DataArea"].AxisX2.LabelStyle.Format = "MM/dd/yyyy";
             }
             else
             {
-                dataGroups = statistics.GroupBy(data => data.Timestamp.Hour);
                 StatisticsChart.ChartAreas["DataArea"].AxisX.LabelStyle.Format = "HH:00";
                 StatisticsChart.ChartAreas["DataArea"].AxisX2.LabelStyle.Format = "HH:00";
             }
-            var finalData = from dataGroup in dataGroups
-                            orderby dataGroup.Key
-                            select new
-                            {
-                                Timestamp = dataGroup.First().Timestamp,
-                                Ping = (int)dataGroup.Average(data => data.RoundtripTime),
-                                PackageLoss = (int)
-                                              (dataGroup.Count(data => data.ICMPStatus.Equals(IPStatus.TimedOut.ToString()))
-                                              / (float)dataGroup.Count() * 100)
-                            };
-            foreach (var data in finalData)
+            foreach (AvailabilityStatistics.StatisticsData data in dataGroups.Values)
             {
-                _dataTable.Rows.Add(data.Timestamp, data.PackageLoss, data.Ping);
+                _dataTable.Rows.Add(data.timestamp, 
+                    data.packageLoss * 100 / data.packageTotal, 
+                    data.roundtripTimeTotal / (data.packageTotal - data.packageLoss));
             }
             StatisticsChart.DataBind();
         }
@@ -136,5 +205,6 @@ namespace Shadowsocks.View
         {
             loadChartData();
         }
+
     }
 }

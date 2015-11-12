@@ -4,6 +4,8 @@ using Shadowsocks.Controller;
 using Shadowsocks.Encryption;
 using System.Threading;
 using System.Collections.Generic;
+using System.Net;
+using System.Net.Sockets;
 
 namespace test
 {
@@ -175,5 +177,96 @@ namespace test
                 throw;
             }
         }
+
+        private bool websocketSuccess = false;
+
+        [TestMethod]
+        public void TestWebSocket()
+        {
+            Thread t = new Thread(new ThreadStart(delegate() {
+                try
+                {
+                    IPAddress ipAddress;
+                    Uri uri = new Uri("ws://echo.websocket.org");
+                    bool parsed = IPAddress.TryParse(uri.Host, out ipAddress);
+                    if (!parsed)
+                    {
+                        IPHostEntry ipHostInfo = Dns.GetHostEntry(uri.Host);
+                        ipAddress = ipHostInfo.AddressList[0];
+                    }
+                    IPEndPoint remoteEP = new IPEndPoint(ipAddress, uri.Port);
+                    WebSocket ws = new WebSocket(ipAddress.AddressFamily,
+                        SocketType.Stream, ProtocolType.Tcp);
+                    ws.SetSocketOption(SocketOptionLevel.Tcp, SocketOptionName.NoDelay, true);
+                    ws.BeginConnect(remoteEP, uri,
+                        new AsyncCallback(ConnectCallback), ws);
+                    while (!ws.IsClosed)
+                        Thread.Sleep(1000);
+                }
+                catch { }
+            }));
+            t.Start();
+            t.Join();
+            Assert.IsTrue(websocketSuccess);
+        }
+
+        private void ConnectCallback(IAsyncResult ar)
+        {
+            ISocket ws = (ISocket)ar.AsyncState;
+            try
+            {
+                // Complete the connection.
+                ws.EndConnect(ar);
+                byte[] data = System.Text.Encoding.ASCII.GetBytes("Hello World!");
+                ws.BeginSend(data, 0, data.Length, 0, new AsyncCallback(SendCallback), ws);
+            }
+            catch 
+            {
+                try { ws.Close(); }
+                catch { }
+            }
+        }
+
+        private void SendCallback(IAsyncResult ar)
+        {
+            ISocket ws = (ISocket)ar.AsyncState;
+            try
+            {
+                ws.EndSend(ar);
+                byte[] buf = new byte[4096];
+                ws.BeginReceive(buf, 0, buf.Length, 0,
+                    new AsyncCallback(ReceiveCallback), new object[] { ws, buf });
+            }
+            catch
+            {
+                try { ws.Close(); }
+                catch { }
+            }
+        }
+
+        private void ReceiveCallback(IAsyncResult ar)
+        {
+            object[] obj = (object[])ar.AsyncState;
+            ISocket ws = (ISocket)obj[0];
+            byte[] buf = (byte[])obj[1];
+            try
+            {
+                int bytesRead = ws.EndReceive(ar);
+                if (bytesRead > 0)
+                {
+                    string msg = System.Text.Encoding.ASCII.GetString(buf, 0, bytesRead);
+                    if (msg == "Hello World!")
+                        websocketSuccess = true;
+                }
+                try { ws.Close(); }
+                catch { }
+            }
+            catch
+            {
+                try { ws.Close(); }
+                catch { }
+            }
+        }
+
     }
 }

@@ -46,6 +46,12 @@ namespace Shadowsocks.Model
             }
         }
 
+        public bool IsWebSocket()
+        {
+            return server.StartsWith("ws://", StringComparison.InvariantCultureIgnoreCase)
+                    || server.StartsWith("wss://", StringComparison.InvariantCultureIgnoreCase);
+        }
+
         public Server()
         {
             this.server = "";

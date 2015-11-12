@@ -63,6 +63,15 @@ namespace Shadowsocks.Controller
                 // TODO async resolving
                 IPAddress ipAddress;
                 bool parsed = IPAddress.TryParse(server.server, out ipAddress);
+                if (server.IsWebSocket())
+                {
+                    Uri uri = new Uri(server.server);
+                    parsed = IPAddress.TryParse(uri.Host, out ipAddress);
+                }
+                else
+                {
+                    parsed = IPAddress.TryParse(server.server, out ipAddress);
+                }
                 if (!parsed)
                 {
                     IPHostEntry ipHostInfo = Dns.GetHostEntry(server.server);

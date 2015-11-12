@@ -78,7 +78,7 @@ namespace Shadowsocks.Controller
         public IEncryptor encryptor;
         public Server server;
         // Client  socket.
-        public Socket remote;
+        public ISocket remote;
         public Socket connection;
         public ShadowsocksController controller;
         public TCPRelay relay;
@@ -381,16 +381,34 @@ namespace Shadowsocks.Controller
 
                 // TODO async resolving
                 IPAddress ipAddress;
-                bool parsed = IPAddress.TryParse(server.server, out ipAddress);
-                if (!parsed)
+                IPEndPoint remoteEP;
+                Uri uri;
+                if (server.IsWebSocket())
                 {
-                    IPHostEntry ipHostInfo = Dns.GetHostEntry(server.server);
-                    ipAddress = ipHostInfo.AddressList[0];
+                    uri = new Uri(server.server);
+                    bool parsed = IPAddress.TryParse(uri.Host, out ipAddress);
+                    if (!parsed)
+                    {
+                        IPHostEntry ipHostInfo = Dns.GetHostEntry(uri.Host);
+                        ipAddress = ipHostInfo.AddressList[0];
+                    }
+                    remoteEP = new IPEndPoint(ipAddress, uri.Port);
+                    remote = new WebSocket(ipAddress.AddressFamily,
+                        SocketType.Stream, ProtocolType.Tcp);
                 }
-                IPEndPoint remoteEP = new IPEndPoint(ipAddress, server.server_port);
-
-                remote = new Socket(ipAddress.AddressFamily,
-                    SocketType.Stream, ProtocolType.Tcp);
+                else
+                {
+                    uri = null;
+                    bool parsed = IPAddress.TryParse(server.server, out ipAddress);
+                    if (!parsed)
+                    {
+                        IPHostEntry ipHostInfo = Dns.GetHostEntry(server.server);
+                        ipAddress = ipHostInfo.AddressList[0];
+                    }
+                    remoteEP = new IPEndPoint(ipAddress, server.server_port);
+                    remote = new RawSocket(ipAddress.AddressFamily,
+                        SocketType.Stream, ProtocolType.Tcp);
+                }
                 remote.SetSocketOption(SocketOptionLevel.Tcp, SocketOptionName.NoDelay, true);
 
                 _startConnectTime = DateTime.Now;
@@ -402,7 +420,7 @@ namespace Shadowsocks.Controller
 
                 connected = false;
                 // Connect to the remote endpoint.
-                remote.BeginConnect(remoteEP,
+                remote.BeginConnect(remoteEP, uri,
                     new AsyncCallback(ConnectCallback), connectTimer);
             }
             catch (Exception e)

@@ -1,12 +1,11 @@
 ﻿using System;
-using System.Text;
-using System.Timers;
 using System.Net;
 using System.Net.Sockets;
-using System.IO;
+using System.Text;
 using System.Threading;
-using Shadowsocks.Model;
+using System.Timers;
 using Shadowsocks.Encryption;
+using Shadowsocks.Model;
 using Timer = System.Timers.Timer;
 
 namespace Shadowsocks.Controller.Service
@@ -84,14 +83,13 @@ namespace Shadowsocks.Controller.Service
 
     public class ServerTester
     {
-        public int ConnectTimeout = 3000;
         public int DownloadTimeout = 4000;
-        /* no ssl, url must start with "http://" */
+        // TODO: HTTPS
         public string DownloadUrl = "http://dl-ssl.google.com/googletalk/googletalk-setup.exe";
 
         public event EventHandler<ServerTesterEventArgs> Completed;
         public event EventHandler<ServerTesterProgressEventArgs> Progress;
-        public Server server;
+        private readonly Server server;
 
         private long connectionTime;
         private Timer timer;
@@ -101,8 +99,8 @@ namespace Shadowsocks.Controller.Service
         private bool connected;
         private volatile int closed;
         private const int BufferSize = 8192;
-        private byte[] RecvBuffer = new byte[BufferSize];
-        private byte[] DecryptBuffer = new byte[BufferSize];
+        private readonly byte[] recvBuffer = new byte[BufferSize];
+        private readonly byte[] decryptBuffer = new byte[BufferSize];
         private long contentLength;
         private long recvTotal;
         private int statusCode;
@@ -131,14 +129,12 @@ namespace Shadowsocks.Controller.Service
 
         public void Close()
         {
+#pragma warning disable 420
             if (Interlocked.CompareExchange(ref closed, 1, 0) == 1) return;
+#pragma warning restore 420
             if (timer != null)
             {
-                if (connected)
-                    timer.Elapsed -= downloadTimer_Elapsed;
-                else
-                    timer.Elapsed -= connectTimer_Elapsed;
-                timer.Enabled = false;
+                timer.Stop();
                 timer.Dispose();
                 timer = null;
             }
@@ -160,17 +156,14 @@ namespace Shadowsocks.Controller.Service
             }
             if (encryptor != null)
             {
-                ((IDisposable)encryptor).Dispose();
+                encryptor.Dispose();
                 encryptor = null;
             }
         }
 
         private void FireCompleted(Exception e)
         {
-            if (Completed != null)
-            {
-                Completed(this, new ServerTesterEventArgs() { Error = e });
-            }
+            Completed?.Invoke(this, new ServerTesterEventArgs { Error = e });
         }
 
         private void FireCompleted(Exception e, long connectionTime, long downloadTotalSize, DateTime startTime)
@@ -211,12 +204,11 @@ namespace Shadowsocks.Controller.Service
                 remote.SetSocketOption(SocketOptionLevel.Tcp, SocketOptionName.NoDelay, true);
 
                 startTime = DateTime.Now;
-                timer = new Timer(ConnectTimeout);
-                timer.AutoReset = false;
-                timer.Elapsed += connectTimer_Elapsed;
-                timer.Enabled = true;
+                timer = new Timer(DownloadTimeout) {AutoReset = false};
+                timer.Elapsed += TimeoutExpired;
+                timer.Start();
 
-                remote.BeginConnect(remoteEP, new AsyncCallback(ConnectCallback), timer);
+                remote.BeginConnect(remoteEP, ConnectCallback, timer);
             }
             catch (Exception e)
             {
@@ -226,7 +218,7 @@ namespace Shadowsocks.Controller.Service
             }
         }
 
-        private void connectTimer_Elapsed(object sender, ElapsedEventArgs e)
+        private void TimeoutExpired(object sender, ElapsedEventArgs e)
         {
             if (closed == 1 || connected) return;
             Logging.Info($"{server.FriendlyName()} timed out");
@@ -239,7 +231,7 @@ namespace Shadowsocks.Controller.Service
             if (closed == 1) return;
             try
             {
-                timer.Elapsed -= connectTimer_Elapsed;
+                timer.Elapsed -= TimeoutExpired;
                 timer.Enabled = false;
                 timer.Dispose();
                 timer = null;
@@ -267,16 +259,12 @@ namespace Shadowsocks.Controller.Service
                 byte[] request = BuildRequestData(new Uri(DownloadUrl));
                 byte[] buffer = new byte[request.Length + IVEncryptor.ONETIMEAUTH_BYTES + IVEncryptor.AUTH_BYTES + 32];
                 encryptor.Encrypt(request, request.Length, buffer, out bytesToSend);
-                timer = new Timer(DownloadTimeout);
-                timer.AutoReset = false;
-                timer.Elapsed += downloadTimer_Elapsed;
-                timer.Enabled = true;
                 startTime = DateTime.Now;
                 contentLength = 0;
                 recvTotal = 0;
                 headerFinish = false;
                 statusCode = 0;
-                remote.BeginSend(buffer, 0, bytesToSend, 0, new AsyncCallback(SendCallback), null);
+                remote.BeginSend(buffer, 0, bytesToSend, 0, SendCallback, null);
             }
             catch (Exception e)
             {
@@ -286,14 +274,6 @@ namespace Shadowsocks.Controller.Service
             }
         }
 
-        private void downloadTimer_Elapsed(object sender, ElapsedEventArgs e)
-        {
-            if (closed == 1) return;
-            Close();
-            FireCompleted(new ServerTesterTimeoutException(true, "download timeout"),
-                connectionTime, recvTotal, startTime);
-        }
-
         private void SendCallback(IAsyncResult ar)
         {
             if (closed == 1) return;
@@ -301,7 +281,7 @@ namespace Shadowsocks.Controller.Service
             {
                 remote.EndSend(ar);
                 startTime = DateTime.Now;
-                remote.BeginReceive(RecvBuffer, 0, BufferSize, 0, new AsyncCallback(ReceiveCallback), null);
+                remote.BeginReceive(recvBuffer, 0, BufferSize, 0, ReceiveCallback, null);
             }
             catch (Exception e)
             {
@@ -321,11 +301,11 @@ namespace Shadowsocks.Controller.Service
                 if (bytesRead > 0)
                 {
                     int bytesLen;
-                    encryptor.Decrypt(RecvBuffer, bytesRead, DecryptBuffer, out bytesLen);
+                    encryptor.Decrypt(recvBuffer, bytesRead, decryptBuffer, out bytesLen);
                     if (!headerFinish)
                     {
                         int offset = 0;
-                        headerFinish = ParseResponseHeader(DecryptBuffer,
+                        headerFinish = ParseResponseHeader(decryptBuffer,
                             ref offset, bytesLen, ref statusCode, ref contentLength);
                         if (statusCode != 200)
                         {
@@ -363,22 +343,13 @@ namespace Shadowsocks.Controller.Service
                         FireCompleted(null, connectionTime, recvTotal, startTime);
                         return;
                     }
-                    remote.BeginReceive(RecvBuffer, 0, BufferSize, 0, new AsyncCallback(ReceiveCallback), null);
+                    remote.BeginReceive(recvBuffer, 0, BufferSize, 0, ReceiveCallback, null);
                 }
                 else
                 {
                     Close();
-                    if (contentLength == 0 || recvTotal == contentLength)
-                    {
-                        FireCompleted(null, connectionTime, recvTotal, startTime);
-                        return;
-                    }
-                    else
-                    {
-                        FireCompleted(new Exception("Server close the connection"),
-                            connectionTime, recvTotal, startTime);
-                        return;
-                    }
+                    FireCompleted(contentLength == 0 || recvTotal == contentLength ? null
+                        : new Exception("Server close the connection"), connectionTime, recvTotal, startTime);
                 }
             }
             catch (Exception e)
@@ -394,7 +365,7 @@ namespace Shadowsocks.Controller.Service
             if (offset >= len)
                 return null;
             int i = offset;
-            while (i < len && data[i++] != '\n') ;
+            while (i < len && data[i++] != '\n') { }
             string line = Encoding.UTF8.GetString(data, offset, i - offset).Trim();
             offset = i;
             return line;
@@ -408,7 +379,7 @@ namespace Shadowsocks.Controller.Service
                 line = ReadLine(data, ref offset, len);
                 if (line == null || !line.StartsWith("HTTP/"))
                     return false;
-                string[] arr = line.Split(new char[] { ' ' });
+                string[] arr = line.Split(' ');
                 if (arr.Length < 3)
                     return false;
                 statusCode = Convert.ToInt32(arr[1]);
@@ -421,7 +392,7 @@ namespace Shadowsocks.Controller.Service
                 }
                 else if (line.StartsWith("Content-Length", StringComparison.InvariantCultureIgnoreCase))
                 {
-                    string[] arr = line.Split(new char[] { ':' });
+                    string[] arr = line.Split(':');
                     contentLength = Convert.ToInt64(arr[1].Trim());
                 }
             }
@@ -431,13 +402,13 @@ namespace Shadowsocks.Controller.Service
         private static byte[] BuildRequestData(Uri uri)
         {
             if (!string.Equals(uri.Scheme, "HTTP", StringComparison.InvariantCultureIgnoreCase))
-                throw new Exception($"Unsupport scheme, expect HTTP");
+                throw new Exception("Unsupport scheme, expect HTTP");
 
             string path = uri.PathAndQuery;
             string host = uri.Host;
             int port = uri.Port;
             string requestStr = $@"GET {path} HTTP/1.1
-Host: {host}{(port == 80 ? string.Empty : ":" + port.ToString())}
+Host: {host}{(port == 80 ? string.Empty : ":" + port)}
 Connection: close
 
 ";

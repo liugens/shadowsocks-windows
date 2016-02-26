@@ -4,9 +4,10 @@ using System.Timers;
 using System.Net;
 using System.Net.Sockets;
 using System.IO;
-
+using System.Threading;
 using Shadowsocks.Model;
 using Shadowsocks.Encryption;
+using Timer = System.Timers.Timer;
 
 namespace Shadowsocks.Controller.Service
 {
@@ -98,7 +99,7 @@ namespace Shadowsocks.Controller.Service
         private IEncryptor encryptor;
         private DateTime startTime;
         private bool connected;
-        private bool closed;
+        private volatile int closed;
         private const int BufferSize = 8192;
         private byte[] RecvBuffer = new byte[BufferSize];
         private byte[] DecryptBuffer = new byte[BufferSize];
@@ -116,7 +117,7 @@ namespace Shadowsocks.Controller.Service
         {
             try
             {
-                closed = false;
+                closed = 0;
                 encryptor = EncryptorFactory.GetEncryptor(server.method, server.password, server.auth, false);
                 StartConnect();
             }
@@ -130,12 +131,7 @@ namespace Shadowsocks.Controller.Service
 
         public void Close()
         {
-            lock (this)
-            {
-                if (closed)
-                    return;
-                closed = true;
-            }
+            if (Interlocked.CompareExchange(ref closed, 1, 0) == 1) return;
             if (timer != null)
             {
                 if (connected)
@@ -196,11 +192,7 @@ namespace Shadowsocks.Controller.Service
 
         private void StartConnect()
         {
-            lock (this)
-            {
-                if (closed)
-                    return;
-            }
+            if (closed == 1) return;
             try
             {
                 connected = false;
@@ -236,13 +228,7 @@ namespace Shadowsocks.Controller.Service
 
         private void connectTimer_Elapsed(object sender, ElapsedEventArgs e)
         {
-            lock (this)
-            {
-                if (closed)
-                    return;
-            }
-            if (connected)
-                return;
+            if (closed == 1 || connected) return;
             Logging.Info($"{server.FriendlyName()} timed out");
             Close();
             FireCompleted(new ServerTesterTimeoutException(false, "Connect Server Timeout"));
@@ -250,11 +236,7 @@ namespace Shadowsocks.Controller.Service
 
         private void ConnectCallback(IAsyncResult ar)
         {
-            lock (this)
-            {
-                if (closed)
-                    return;
-            }
+            if (closed == 1) return;
             try
             {
                 timer.Elapsed -= connectTimer_Elapsed;
@@ -278,11 +260,7 @@ namespace Shadowsocks.Controller.Service
 
         private void StartDownload()
         {
-            lock (this)
-            {
-                if (closed)
-                    return;
-            }
+            if (closed == 1) return;
             try
             {
                 int bytesToSend;
@@ -310,11 +288,7 @@ namespace Shadowsocks.Controller.Service
 
         private void downloadTimer_Elapsed(object sender, ElapsedEventArgs e)
         {
-            lock (this)
-            {
-                if (closed)
-                    return;
-            }
+            if (closed == 1) return;
             Close();
             FireCompleted(new ServerTesterTimeoutException(true, "download timeout"),
                 connectionTime, recvTotal, startTime);
@@ -322,11 +296,7 @@ namespace Shadowsocks.Controller.Service
 
         private void SendCallback(IAsyncResult ar)
         {
-            lock (this)
-            {
-                if (closed)
-                    return;
-            }
+            if (closed == 1) return;
             try
             {
                 remote.EndSend(ar);
@@ -343,11 +313,7 @@ namespace Shadowsocks.Controller.Service
 
         private void ReceiveCallback(IAsyncResult ar)
         {
-            lock (this)
-            {
-                if (closed)
-                    return;
-            }
+            if (closed == 1) return;
             try
             {
                 int bytesRead = remote.EndReceive(ar);

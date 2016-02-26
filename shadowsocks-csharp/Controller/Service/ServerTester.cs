@@ -83,9 +83,15 @@ namespace Shadowsocks.Controller.Service
 
     public class ServerTester
     {
-        public int DownloadTimeout = 4000;
-        // TODO: HTTPS
-        public string DownloadUrl = "http://dl-ssl.google.com/googletalk/googletalk-setup.exe";
+        // TODO: Customization
+        public static int DownloadLengthMin = 1048576, DownloadLengthMax = 1572864;
+        public static int DownloadTimeoutMin = 4000, DownloadTimeoutMax = 6000;
+        private static readonly Random Random = new Random();
+        public readonly double Quantity = Random.NextDouble();
+        public readonly int DownloadLength;
+        public readonly double DownloadTimeout;
+        // TODO: Customization, HTTPS
+        public string DownloadUrl = "http://dl-ssl.google.com/update2/installers/ChromeStandaloneSetup.exe";
 
         public event EventHandler<ServerTesterEventArgs> Completed;
         public event EventHandler<ServerTesterProgressEventArgs> Progress;
@@ -109,6 +115,8 @@ namespace Shadowsocks.Controller.Service
         public ServerTester(Server server)
         {
             this.server = server;
+            DownloadLength = (int) (DownloadLengthMin + (DownloadLengthMax - DownloadLengthMin) * Quantity);
+            DownloadTimeout = DownloadTimeoutMin + (DownloadTimeoutMax - DownloadTimeoutMin) * Quantity;
         }
 
         public void Start()
@@ -172,7 +180,7 @@ namespace Shadowsocks.Controller.Service
             {
                 long milliseconds = (long)(DateTime.Now - startTime).TotalMilliseconds;
                 long speed = milliseconds > 0 ? (downloadTotalSize * 1000) / milliseconds : 0;
-                Completed(this, new ServerTesterEventArgs()
+                Completed(this, new ServerTesterEventArgs
                 {
                     Error = e,
                     ConnectionTime = connectionTime,
@@ -204,7 +212,7 @@ namespace Shadowsocks.Controller.Service
                 remote.SetSocketOption(SocketOptionLevel.Tcp, SocketOptionName.NoDelay, true);
 
                 startTime = DateTime.Now;
-                timer = new Timer(DownloadTimeout) {AutoReset = false};
+                timer = new Timer(DownloadTimeout) { AutoReset = false};
                 timer.Elapsed += TimeoutExpired;
                 timer.Start();
 
@@ -297,7 +305,6 @@ namespace Shadowsocks.Controller.Service
             try
             {
                 int bytesRead = remote.EndReceive(ar);
-                timer.Interval = DownloadTimeout;
                 if (bytesRead > 0)
                 {
                     int bytesLen;
@@ -313,10 +320,7 @@ namespace Shadowsocks.Controller.Service
                             FireCompleted(new Exception($"server response {statusCode}"));
                             return;
                         }
-                        else
-                        {
-                            bytesLen -= offset;
-                        }
+                        bytesLen -= offset;
                     }
                     recvTotal += bytesLen;
                     if (Progress != null)
@@ -337,7 +341,7 @@ namespace Shadowsocks.Controller.Service
                             return;
                         }
                     }
-                    if (contentLength > 0 && recvTotal == contentLength)
+                    if (contentLength > 0 && (recvTotal == contentLength || recvTotal >= DownloadLength))
                     {
                         Close();
                         FireCompleted(null, connectionTime, recvTotal, startTime);
@@ -386,15 +390,10 @@ namespace Shadowsocks.Controller.Service
             }
             while ((line = ReadLine(data, ref offset, len)) != null)
             {
-                if (line == "")
-                {
-                    return true;
-                }
-                else if (line.StartsWith("Content-Length", StringComparison.InvariantCultureIgnoreCase))
-                {
-                    string[] arr = line.Split(':');
-                    contentLength = Convert.ToInt64(arr[1].Trim());
-                }
+                if (line == "") return true;
+                if (!line.StartsWith("Content-Length", StringComparison.InvariantCultureIgnoreCase)) continue;
+                string[] arr = line.Split(':');
+                contentLength = Convert.ToInt64(arr[1].Trim());
             }
             return false;
         }

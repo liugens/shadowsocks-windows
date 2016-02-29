@@ -46,6 +46,11 @@ namespace Shadowsocks.Controller.Service
         public bool Cancel;
 
         /// <summary>
+        /// consumed time on connect server
+        /// </summary>
+        public long ConnectionTime;
+
+        /// <summary>
         /// total size need download.
         /// zero when no Content-Length include in response header
         /// </summary>
@@ -83,6 +88,7 @@ namespace Shadowsocks.Controller.Service
 
     public class ServerTester
     {
+        public const int ReserveSize = 32 + IVEncryptor.ONETIMEAUTH_BYTES + IVEncryptor.AUTH_BYTES; // reserve for one-time auth
         // TODO: Customization
         public static int DownloadLengthMin = 1048576, DownloadLengthMax = 1572864;
         public static int DownloadTimeoutMin = 4000, DownloadTimeoutMax = 6000;
@@ -95,6 +101,7 @@ namespace Shadowsocks.Controller.Service
 
         public event EventHandler<ServerTesterEventArgs> Completed;
         public event EventHandler<ServerTesterProgressEventArgs> Progress;
+        public readonly object userState;
         private readonly Server server;
 
         private long connectionTime;
@@ -112,9 +119,10 @@ namespace Shadowsocks.Controller.Service
         private int statusCode;
         private bool headerFinish;
 
-        public ServerTester(Server server)
+        public ServerTester(Server server, object userState)
         {
             this.server = server;
+            this.userState = userState;
             DownloadLength = (int) (DownloadLengthMin + (DownloadLengthMax - DownloadLengthMin) * Quantity);
             DownloadTimeout = DownloadTimeoutMin + (DownloadTimeoutMax - DownloadTimeoutMin) * Quantity;
         }
@@ -263,10 +271,10 @@ namespace Shadowsocks.Controller.Service
             if (closed == 1) return;
             try
             {
-                int bytesToSend;
-                byte[] request = BuildRequestData(new Uri(DownloadUrl));
-                byte[] buffer = new byte[request.Length + IVEncryptor.ONETIMEAUTH_BYTES + IVEncryptor.AUTH_BYTES + 32];
-                encryptor.Encrypt(request, request.Length, buffer, out bytesToSend);
+                int requestLength, bytesToSend;
+                byte[] request = BuildSendBuffer(new Uri(DownloadUrl), out requestLength);
+                byte[] buffer = new byte[requestLength + ReserveSize];
+                encryptor.Encrypt(request, requestLength, buffer, out bytesToSend);
                 startTime = DateTime.Now;
                 contentLength = 0;
                 recvTotal = 0;
@@ -328,6 +336,7 @@ namespace Shadowsocks.Controller.Service
                         ServerTesterProgressEventArgs args = new ServerTesterProgressEventArgs()
                         {
                             Cancel = false,
+                            ConnectionTime = connectionTime,
                             Total = contentLength,
                             Download = recvTotal,
                             Milliseconds = (long)(DateTime.Now - startTime).TotalMilliseconds
@@ -398,7 +407,7 @@ namespace Shadowsocks.Controller.Service
             return false;
         }
 
-        private static byte[] BuildRequestData(Uri uri)
+        private static byte[] BuildSendBuffer(Uri uri, out int dataLength)
         {
             if (!string.Equals(uri.Scheme, "HTTP", StringComparison.InvariantCultureIgnoreCase))
                 throw new Exception("Unsupport scheme, expect HTTP");
@@ -413,7 +422,8 @@ Connection: close
 ";
             byte[] requestBytes = Encoding.ASCII.GetBytes(requestStr);
             byte[] domainBytes = Encoding.ASCII.GetBytes(host);
-            byte[] request = new byte[4 + domainBytes.Length + requestBytes.Length];
+            dataLength = 4 + domainBytes.Length + requestBytes.Length; /* atype + domain length + port + request header */
+            byte[] request = new byte[dataLength + ReserveSize];
             int i = 0;
             request[i++] = 0x03;
             request[i++] = (byte)domainBytes.Length;

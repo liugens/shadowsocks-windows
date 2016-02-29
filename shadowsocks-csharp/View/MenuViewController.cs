@@ -47,6 +47,7 @@ namespace Shadowsocks.View
         private MenuItem editOnlinePACItem;
         private MenuItem autoCheckUpdatesToggleItem;
         private ConfigForm configForm;
+        private TestServerSpeedForm chooseBestServerForm;
         private List<LogForm> logForms = new List<LogForm>();
         private bool logFormsVisible = false;
         private string _urlToOpen;
@@ -196,7 +197,7 @@ namespace Shadowsocks.View
                 this.AutoStartupItem = CreateMenuItem("Start on Boot", new EventHandler(this.AutoStartupItem_Click)),
                 this.ShareOverLANItem = CreateMenuItem("Allow Clients from LAN", new EventHandler(this.ShareOverLANItem_Click)),
                 new MenuItem("-"),
-                CreateMenuItem("Test connection speed...", TestConnectionSpeedItem_Click),
+                CreateMenuItem("Test Server Speed...", TestServerSpeedItem_Click),
                 new MenuItem("-"),
                 CreateMenuItem("Show Logs...", new EventHandler(this.ShowLogItem_Click)),
                 CreateMenuGroup("Updates...", new MenuItem[] {
@@ -492,9 +493,23 @@ namespace Shadowsocks.View
             controller.SelectStrategy((string)item.Tag);
         }
 
-        private void TestConnectionSpeedItem_Click(object sender, EventArgs e)
+        private void TestServerSpeedItem_Click(object sender, EventArgs e)
         {
-            ConnectionSpeedTester.TestConnection(new ConnectionSpeedTester.BackgroundThread(controller));
+            if (chooseBestServerForm != null)
+            {
+                chooseBestServerForm.Activate();
+            }
+            else
+            {
+                chooseBestServerForm = new TestServerSpeedForm(controller);
+                chooseBestServerForm.FormClosed += ChooseBestServerForm_FormClosed;
+                chooseBestServerForm.Show();
+            }
+        }
+
+        private void ChooseBestServerForm_FormClosed(object sender, FormClosedEventArgs e)
+        {
+            chooseBestServerForm = null;
         }
 
         private void ShowLogItem_Click(object sender, EventArgs e)

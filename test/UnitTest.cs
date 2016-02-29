@@ -193,21 +193,5 @@ namespace test
             }
         }
 
-        /* just a sample, do not run the test, we have no validat server */
-        //[TestMethod]
-        public void TestServerTester()
-        {
-            Server server = new Server()
-            {
-                server = "127.0.0.1",
-                server_port = 8388,
-                method = "aes-256-cfb",
-                password = "password",
-                auth = false
-            };
-            ServerTesterHelper helper = new ServerTesterHelper();
-            bool r = helper.Test(server);
-            Assert.IsTrue(r);
-        }
     }
 }

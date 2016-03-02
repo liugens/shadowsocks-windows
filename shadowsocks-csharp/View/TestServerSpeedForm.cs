@@ -59,18 +59,14 @@ namespace Shadowsocks.View
                     server = server,
                     index = i++
                 };
+                row.Cells.Add(new DataGridViewCheckBoxCell());
                 row.Cells.Add(new DataGridViewTextBoxCell { Value = server.FriendlyName() });
                 row.Cells.Add(new DataGridViewTextBoxCell { Value = "-" });
                 row.Cells.Add(new DataGridViewProgressCell {
                     Value = "-",
                     ProgressEnable = false
                 });
-                row.Cells.Add(new DataGridViewDisableButtonCell
-                {
-                    Value = I18N.GetString("Test"),
-                    Enabled = true
-                });
-                row.Cells[0].Style.Alignment = DataGridViewContentAlignment.MiddleLeft;
+                row.Cells[1].Style.Alignment = DataGridViewContentAlignment.MiddleLeft;
                 rows.Add(row);
             }
             ServersDataGridView.Rows.Clear();
@@ -86,12 +82,9 @@ namespace Shadowsocks.View
                 {
                     state.tester.Close();
                     state.tester = null;
-                    state.row.Cells[1].Value = I18N.GetString("Cancelled");
                     state.row.Cells[2].Value = I18N.GetString("Cancelled");
-                    ((DataGridViewProgressCell)state.row.Cells[2]).ProgressEnable = false;
-                    state.row.Cells[3].Value = I18N.GetString("Retest");
-                    ((DataGridViewDisableButtonCell)state.row.Cells[3]).Enabled = true;
-                    ServersDataGridView.InvalidateCell(state.row.Cells[3]);
+                    state.row.Cells[3].Value = I18N.GetString("Cancelled");
+                    ((DataGridViewProgressCell)state.row.Cells[3]).ProgressEnable = false;
                     Logging.Debug($"cancel test {state.server.FriendlyName()}");
                 }
             }
@@ -128,14 +121,14 @@ namespace Shadowsocks.View
 
         private void ServersDataGridView_CellClick(object sender, DataGridViewCellEventArgs e)
         {
-            if (e.ColumnIndex == 3)
-            {
-                DataGridViewRow row = ServersDataGridView.Rows[e.RowIndex];
-                if (((DataGridViewDisableButtonCell)row.Cells[3]).Enabled)
-                {
-                    StartTest(row);
-                }
-            }
+            //if (e.ColumnIndex == 3)
+            //{
+            //    DataGridViewRow row = ServersDataGridView.Rows[e.RowIndex];
+            //    if (((DataGridViewDisableButtonCell)row.Cells[3]).Enabled)
+            //    {
+            //        StartTest(row);
+            //    }
+            //}
         }
 
         private void StartTest(DataGridViewRow row)
@@ -149,12 +142,9 @@ namespace Shadowsocks.View
             state.tester = new ServerTester(state.server, state);
             state.tester.Completed += Tester_Completed;
             state.tester.Progress += Tester_Progress;
-            state.row.Cells[1].Value = "-";
             state.row.Cells[2].Value = "-";
-            state.row.Cells[3].Value = I18N.GetString("Testing...");
-            ((DataGridViewProgressCell)state.row.Cells[2]).ProgressEnable = true;
-            ((DataGridViewDisableButtonCell)state.row.Cells[3]).Enabled = false;
-
+            state.row.Cells[3].Value = "-";
+            ((DataGridViewProgressCell)state.row.Cells[3]).ProgressEnable = true;
             state.tester.Start();
         }
 
@@ -167,11 +157,11 @@ namespace Shadowsocks.View
             if (total > 0)
             {
                 int percentage = (int)(e.Download * 100 / total);
-                state.row.Cells[2].Value = percentage.ToString();
+                state.row.Cells[3].Value = percentage.ToString();
             }
         }
 
-        private void Tester_Completed(object sender, ServerTesterEventArgs e)
+        private void Tester_Completed(object sender, ServerTesterCompletedEventArgs e)
         {
             ServerTester tester = (ServerTester)sender;
             TesterState state = (TesterState)tester.userState;
@@ -183,33 +173,30 @@ namespace Shadowsocks.View
                 state.connectionTime = e.ConnectionTime;
                 state.speed = e.DownloadSpeed;
 
-                state.row.Cells[1].Value = e.ConnectionTime.ToString() + "ms";
-                state.row.Cells[2].Value = GetSizeShort(e.DownloadSpeed) + "/s";
+                state.row.Cells[2].Value = e.ConnectionTime.ToString() + "ms";
+                state.row.Cells[3].Value = GetSizeShort(e.DownloadSpeed) + "/s";
             }
             else
             {
                 Logging.Debug($"failed test {state.server.FriendlyName()}: {e.Error}");
                 if (e.Error is ServerTesterTimeoutException)
                 {
-                    state.row.Cells[1].Value = I18N.GetString("Timeout");
                     state.row.Cells[2].Value = I18N.GetString("Timeout");
+                    state.row.Cells[3].Value = I18N.GetString("Timeout");
                 }
                 else if (e.Error is ServerTesterCancelException)
                 {
-                    state.row.Cells[1].Value = I18N.GetString("Cancelled");
                     state.row.Cells[2].Value = I18N.GetString("Cancelled");
+                    state.row.Cells[3].Value = I18N.GetString("Cancelled");
                 }
                 else
                 {
-                    state.row.Cells[1].Value = e.Error.Message;
                     state.row.Cells[2].Value = e.Error.Message;
+                    state.row.Cells[3].Value = e.Error.Message;
                 }
             }
 
-            state.row.Cells[3].Value = I18N.GetString("Retest");
-            ((DataGridViewProgressCell)state.row.Cells[2]).ProgressEnable = false;
-            ((DataGridViewDisableButtonCell)state.row.Cells[3]).Enabled = true;
-            ServersDataGridView.InvalidateCell(state.row.Cells[3]);
+            ((DataGridViewProgressCell)state.row.Cells[3]).ProgressEnable = false;
 
             if (state.row.Index < ServersDataGridView.Rows.Count - 1)
             {

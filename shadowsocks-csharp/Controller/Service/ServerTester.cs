@@ -10,7 +10,7 @@ using Timer = System.Timers.Timer;
 
 namespace Shadowsocks.Controller.Service
 {
-    public class ServerTesterEventArgs : EventArgs
+    public class ServerTesterCompletedEventArgs : EventArgs
     {
         /// <summary>
         /// value is null when no error
@@ -38,7 +38,7 @@ namespace Shadowsocks.Controller.Service
         public long DownloadSpeed;
     }
 
-    public class ServerTesterProgressEventArgs : EventArgs
+    public class ServerTesterConnectedEventArgs : EventArgs
     {
         /// <summary>
         /// cancel download
@@ -49,6 +49,14 @@ namespace Shadowsocks.Controller.Service
         /// consumed time on connect server
         /// </summary>
         public long ConnectionTime;
+    }
+
+    public class ServerTesterProgressEventArgs : EventArgs
+    {
+        /// <summary>
+        /// cancel download
+        /// </summary>
+        public bool Cancel;
 
         /// <summary>
         /// total size need download.
@@ -99,8 +107,9 @@ namespace Shadowsocks.Controller.Service
         // TODO: Customization, HTTPS
         public string DownloadUrl = "http://dl-ssl.google.com/update2/installers/ChromeStandaloneSetup.exe";
 
-        public event EventHandler<ServerTesterEventArgs> Completed;
+        public event EventHandler<ServerTesterCompletedEventArgs> Completed;
         public event EventHandler<ServerTesterProgressEventArgs> Progress;
+        public event EventHandler<ServerTesterConnectedEventArgs> Connected;
         public readonly object userState;
         private readonly Server server;
 
@@ -179,24 +188,62 @@ namespace Shadowsocks.Controller.Service
 
         private void FireCompleted(Exception e)
         {
-            Completed?.Invoke(this, new ServerTesterEventArgs { Error = e });
+            Completed?.Invoke(this, new ServerTesterCompletedEventArgs { Error = e });
         }
 
-        private void FireCompleted(Exception e, long connectionTime, long downloadTotalSize, DateTime startTime)
+        private void FireCompleted()
         {
             if (Completed != null)
             {
                 long milliseconds = (long)(DateTime.Now - startTime).TotalMilliseconds;
-                long speed = milliseconds > 0 ? (downloadTotalSize * 1000) / milliseconds : 0;
-                Completed(this, new ServerTesterEventArgs
+                long speed = milliseconds > 0 ? (recvTotal * 1000) / milliseconds : 0;
+                Completed(this, new ServerTesterCompletedEventArgs
                 {
-                    Error = e,
                     ConnectionTime = connectionTime,
-                    DownloadTotal = downloadTotalSize,
+                    DownloadTotal = recvTotal,
                     DownloadMilliseconds = milliseconds,
                     DownloadSpeed = speed
                 });
             }
+        }
+
+        private bool FireConnected()
+        {
+            if (Connected != null)
+            {
+                ServerTesterConnectedEventArgs args = new ServerTesterConnectedEventArgs
+                {
+                    ConnectionTime = connectionTime
+                };
+                Connected(this, args);
+                return args.Cancel;
+            }
+            return false;
+        }
+
+        private bool FireProgress()
+        {
+            if (Progress != null)
+            {
+                long total = (long)DownloadLength < contentLength) ? (long)DownloadLength : contentLength;
+                ServerTesterProgressEventArgs args = new ServerTesterProgressEventArgs()
+                {
+                    ConnectionTime = connectionTime,
+                    Total = contentLength,
+                    Download = recvTotal,
+                    Milliseconds = (long)(DateTime.Now - startTime).TotalMilliseconds
+                };
+                Progress(this, args);
+                return args.Cancel;
+            }
+            return false;
+        }
+
+        private void CancelDownload()
+        {
+            Close();
+            FireCompleted(new ServerTesterCancelException("Cancelled"),
+                connectionTime, recvTotal, startTime);
         }
 
         private void StartConnect()
@@ -255,8 +302,14 @@ namespace Shadowsocks.Controller.Service
                 remote.EndConnect(ar);
 
                 connected = true;
-
                 connectionTime = (long)(DateTime.Now - startTime).TotalMilliseconds;
+
+                if (FireConnected(connectionTime))
+                {
+                    CancelDownload();
+                    return;
+                }
+
                 StartDownload();
             }
             catch (Exception e)

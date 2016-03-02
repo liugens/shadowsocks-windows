@@ -37,10 +37,10 @@
             this.TestServersButton = new System.Windows.Forms.Button();
             this.StatusIcons = new System.Windows.Forms.ImageList(this.components);
             this.ServersDataGridView = new System.Windows.Forms.DataGridView();
+            this.SelectColumn = new System.Windows.Forms.DataGridViewCheckBoxColumn();
             this.ServerNameColumn = new System.Windows.Forms.DataGridViewTextBoxColumn();
             this.ConnectionTimeColumn = new System.Windows.Forms.DataGridViewTextBoxColumn();
             this.SpeedColumn = new Shadowsocks.View.DataGridViewProgressColumn();
-            this.ButtonColumn = new System.Windows.Forms.DataGridViewTextBoxColumn();
             this.ButtonsPanel.SuspendLayout();
             this.ButtonsGroupPanel.SuspendLayout();
             ((System.ComponentModel.ISupportInitialize)(this.ServersDataGridView)).BeginInit();
@@ -95,10 +95,10 @@
             this.ServersDataGridView.ColumnHeadersDefaultCellStyle = dataGridViewCellStyle1;
             this.ServersDataGridView.ColumnHeadersHeightSizeMode = System.Windows.Forms.DataGridViewColumnHeadersHeightSizeMode.AutoSize;
             this.ServersDataGridView.Columns.AddRange(new System.Windows.Forms.DataGridViewColumn[] {
+            this.SelectColumn,
             this.ServerNameColumn,
             this.ConnectionTimeColumn,
-            this.SpeedColumn,
-            this.ButtonColumn});
+            this.SpeedColumn});
             dataGridViewCellStyle2.Alignment = System.Windows.Forms.DataGridViewContentAlignment.MiddleCenter;
             dataGridViewCellStyle2.BackColor = System.Drawing.SystemColors.Window;
             dataGridViewCellStyle2.Font = new System.Drawing.Font("Microsoft Sans Serif", 8.25F, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point, ((byte)(134)));
@@ -115,6 +115,14 @@
             this.ServersDataGridView.SelectionMode = System.Windows.Forms.DataGridViewSelectionMode.FullRowSelect;
             this.ServersDataGridView.Size = new System.Drawing.Size(488, 397);
             this.ServersDataGridView.TabIndex = 1;
+            // 
+            // SelectColumn
+            // 
+            this.SelectColumn.Frozen = true;
+            this.SelectColumn.HeaderText = "";
+            this.SelectColumn.Name = "SelectColumn";
+            this.SelectColumn.ReadOnly = true;
+            this.SelectColumn.Width = 30;
             // 
             // ServerNameColumn
             // 
@@ -142,14 +150,6 @@
             this.SpeedColumn.Resizable = System.Windows.Forms.DataGridViewTriState.True;
             this.SpeedColumn.SortMode = System.Windows.Forms.DataGridViewColumnSortMode.Automatic;
             // 
-            // ButtonColumn
-            // 
-            this.ButtonColumn.AutoSizeMode = System.Windows.Forms.DataGridViewAutoSizeColumnMode.Fill;
-            this.ButtonColumn.FillWeight = 15F;
-            this.ButtonColumn.HeaderText = "";
-            this.ButtonColumn.Name = "ButtonColumn";
-            this.ButtonColumn.ReadOnly = true;
-            // 
             // TestServerSpeedForm
             // 
             this.AutoScaleDimensions = new System.Drawing.SizeF(6F, 13F);
@@ -174,7 +174,7 @@
         private System.Windows.Forms.Button TestServersButton;
         private System.Windows.Forms.Panel ButtonsGroupPanel;
         private System.Windows.Forms.DataGridView ServersDataGridView;
-        private System.Windows.Forms.DataGridViewTextBoxColumn ButtonColumn;
+        private System.Windows.Forms.DataGridViewCheckBoxColumn SelectColumn;
         private DataGridViewProgressColumn SpeedColumn;
         private System.Windows.Forms.DataGridViewTextBoxColumn ConnectionTimeColumn;
         private System.Windows.Forms.DataGridViewTextBoxColumn ServerNameColumn;

@@ -8,78 +8,81 @@ using System.Net.NetworkInformation;
 using System.Net.Sockets;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Text;
 using Newtonsoft.Json;
 using Shadowsocks.Model;
 using Shadowsocks.Util;
 
 namespace Shadowsocks.Controller
 {
-    using Statistics = Dictionary<string, List<StatisticsRecord>>;
-
     public sealed class AvailabilityStatistics : IDisposable
     {
-        public const string DateTimePattern = "yyyy-MM-dd HH:mm:ss";
-        private const string StatisticsFilesName = "shadowsocks.availability.json";
+        private const string StatisticsFilesName = "shadowsocks.availability.v2.csv";
         public static string AvailabilityStatisticsFile;
+
+        // Static Singleton Initialization
+        public static AvailabilityStatistics Instance { get; } = new AvailabilityStatistics();
+
         //static constructor to initialize every public static fields before refereced
         static AvailabilityStatistics()
         {
             AvailabilityStatisticsFile = Utils.GetTempPath(StatisticsFilesName);
         }
 
-        //arguments for ICMP tests
-        private int Repeat => Config.RepeatTimesNum;
-        public const int TimeoutMilliseconds = 500;
-
-        //records cache for current server in {_monitorInterval} minutes
-        private readonly ConcurrentDictionary<string, List<int>> _latencyRecords = new ConcurrentDictionary<string, List<int>>();
-        //speed in KiB/s
-        private readonly ConcurrentDictionary<string, long> _inboundCounter = new ConcurrentDictionary<string, long>();
-        private readonly ConcurrentDictionary<string, long> _lastInboundCounter = new ConcurrentDictionary<string, long>();
-        private readonly ConcurrentDictionary<string, List<int>> _inboundSpeedRecords = new ConcurrentDictionary<string, List<int>>();
-        private readonly ConcurrentDictionary<string, long> _outboundCounter = new ConcurrentDictionary<string, long>();
-        private readonly ConcurrentDictionary<string, long> _lastOutboundCounter = new ConcurrentDictionary<string, long>();
-        private readonly ConcurrentDictionary<string, List<int>> _outboundSpeedRecords = new ConcurrentDictionary<string, List<int>>();
-
-        //tasks
-        private readonly TimeSpan _delayBeforeStart = TimeSpan.FromSeconds(1);
-        private readonly TimeSpan _retryInterval = TimeSpan.FromMinutes(2);
-        private Timer _recorder; //analyze and save cached records to RawStatistics and filter records
-        private TimeSpan RecordingInterval => TimeSpan.FromMinutes(Config.DataCollectionMinutes);
-        private Timer _speedMonior;
-        private readonly TimeSpan _monitorInterval = TimeSpan.FromSeconds(1);
-        //private Timer _writer; //write RawStatistics to file
-        //private readonly TimeSpan _writingInterval = TimeSpan.FromMinutes(1);
-
         private ShadowsocksController _controller;
-        private StatisticsStrategyConfiguration Config => _controller.StatisticsConfiguration;
+        public StatisticsStrategyConfiguration _config;
+        private Timer _recorder; //analyze and save cached records to RawStatistics and filter records
+        private Timer _speedMonior;
+        private readonly TimeSpan DelayBeforeStart = TimeSpan.FromSeconds(1);
+        private readonly TimeSpan RetryInterval = TimeSpan.FromMinutes(2);
+        private readonly TimeSpan MonitorInterval = TimeSpan.FromSeconds(1);
 
-        // Static Singleton Initialization
-        public static AvailabilityStatistics Instance { get; } = new AvailabilityStatistics();
-        public Statistics RawStatistics { get; private set; }
-        public Statistics FilteredStatistics { get; private set; }
+        private readonly ConcurrentDictionary<string, ServerStatistics> _serverStatistics = new ConcurrentDictionary<string, ServerStatistics>();
+        public ConcurrentDictionary<string, StatisticsGroup> _serverStatisticsGroups = new ConcurrentDictionary<string, StatisticsGroup>();
 
         private AvailabilityStatistics()
         {
-            RawStatistics = new Statistics();
+            LoadStatisticsGroups();
         }
 
-        internal void UpdateConfiguration(ShadowsocksController controller)
+        public void UpdateConfiguration(ShadowsocksController controller)
         {
             _controller = controller;
-            Reset();
+            _config = _controller.GetCurrentStatisticsStrategyConfiguration();
+            _serverStatistics.Clear();
             try
             {
-                if (Config.StatisticsEnabled)
+                if (_config.StatisticsEnabled)
                 {
-                    StartTimerWithoutState(ref _recorder, Run, RecordingInterval);
-                    LoadRawStatistics();
-                    StartTimerWithoutState(ref _speedMonior, UpdateSpeed, _monitorInterval);
+                    if (_recorder == null)
+                    {
+                        _recorder = new Timer(SaveRecord, null, DelayBeforeStart, TimeSpan.FromMinutes(_config.DataCollectionMinutes));
+                    }
+                    else
+                    {
+                        _recorder.Change(DelayBeforeStart, TimeSpan.FromMinutes(_config.DataCollectionMinutes));
+                    }
+                    if (_speedMonior == null)
+                    {
+                        _speedMonior = new Timer(UpdateSpeed, null, DelayBeforeStart, MonitorInterval);
+                    }
+                    else
+                    {
+                        _speedMonior.Change(DelayBeforeStart, MonitorInterval);
+                    }
                 }
                 else
                 {
-                    _recorder?.Dispose();
-                    _speedMonior?.Dispose();
+                    if (_recorder != null)
+                    {
+                        _recorder.Dispose();
+                        _recorder = null;
+                    }
+                    if (_speedMonior != null)
+                    {
+                        _speedMonior.Dispose();
+                        _speedMonior = null;
+                    }
                 }
             }
             catch (Exception e)
@@ -88,157 +91,117 @@ namespace Shadowsocks.Controller
             }
         }
 
-        private void StartTimerWithoutState(ref Timer timer, TimerCallback callback, TimeSpan interval)
+        public void Dispose()
         {
-            if (timer?.Change(_delayBeforeStart, interval) == null)
+            if (_recorder != null)
             {
-                timer = new Timer(callback, null, _delayBeforeStart, interval);
+                _recorder.Dispose();
+                _recorder = null;
             }
+            if (_speedMonior != null)
+            {
+                _speedMonior.Dispose();
+                _speedMonior = null;
+            }
+        }
+
+        public void UpdateLatency(Server server, int latency)
+        {
+            ServerStatistics st = _serverStatistics.GetOrAdd(server.Identifier(), (k) => new ServerStatistics(server));
+            st.UpdateLatency(server, latency);
+        }
+
+        public void UpdateInboundCounter(Server server, long n)
+        {
+            ServerStatistics st = _serverStatistics.GetOrAdd(server.Identifier(), (k) => new ServerStatistics(server));
+            st.UpdateInboundCounter(server, n);
+        }
+
+        public void UpdateOutboundCounter(Server server, long n)
+        {
+            ServerStatistics st = _serverStatistics.GetOrAdd(server.Identifier(), (k) => new ServerStatistics(server));
+            st.UpdateOutboundCounter(server, n);
         }
 
         private void UpdateSpeed(object _)
         {
-            foreach (var kv in _lastInboundCounter)
+            foreach (KeyValuePair<string, ServerStatistics> kv in _serverStatistics)
             {
-                var id = kv.Key;
-
-                var lastInbound = kv.Value;
-                var inbound = _inboundCounter[id];
-                var bytes = inbound - lastInbound;
-                _lastInboundCounter[id] = inbound;
-                var inboundSpeed = GetSpeedInKiBPerSecond(bytes, _monitorInterval.TotalSeconds);
-                _inboundSpeedRecords.GetOrAdd(id, (k) =>
-                {
-                    List<int> records = new List<int>();
-                    records.Add(inboundSpeed);
-                    return records;
-                });
-
-                var lastOutbound = _lastOutboundCounter[id];
-                var outbound = _outboundCounter[id];
-                bytes = outbound - lastOutbound;
-                _lastOutboundCounter[id] = outbound;
-                var outboundSpeed = GetSpeedInKiBPerSecond(bytes, _monitorInterval.TotalSeconds);
-                _outboundSpeedRecords.GetOrAdd(id, (k) =>
-                {
-                    List<int> records = new List<int>();
-                    records.Add(outboundSpeed);
-                    return records;
-                });
-
-                Logging.Debug(
-                    $"{id}: current/max inbound {inboundSpeed}/{_inboundSpeedRecords[id].Max()} KiB/s, current/max outbound {outboundSpeed}/{_outboundSpeedRecords[id].Max()} KiB/s");
+                kv.Value.UpdateSpeed(MonitorInterval.TotalSeconds);
             }
         }
 
-        private void Reset()
+        private void SaveRecord(object _)
         {
-            _inboundSpeedRecords.Clear();
-            _outboundSpeedRecords.Clear();
-            _latencyRecords.Clear();
-        }
-
-        private void Run(object _)
-        {
-            UpdateRecords();
-            Reset();
-        }
-
-        private void UpdateRecords()
-        {
-            var records = new Dictionary<string, StatisticsRecord>();
-            UpdateRecordsState state = new UpdateRecordsState();
-            state.counter = _controller.GetCurrentConfiguration().configs.Count;
-            foreach (var server in _controller.GetCurrentConfiguration().configs)
+            List<StatisticsRecord> records = new List<StatisticsRecord>();
+            foreach (KeyValuePair<string, ServerStatistics> kv in _serverStatistics)
             {
-                var id = server.Identifier();
-                List<int> inboundSpeedRecords = null;
-                List<int> outboundSpeedRecords = null;
-                List<int> latencyRecords = null;
-                _inboundSpeedRecords.TryGetValue(id, out inboundSpeedRecords);
-                _outboundSpeedRecords.TryGetValue(id, out outboundSpeedRecords);
-                _latencyRecords.TryGetValue(id, out latencyRecords);
-                StatisticsRecord record = new StatisticsRecord(id, inboundSpeedRecords, outboundSpeedRecords, latencyRecords);
-                /* duplicate server identifier */
-                if (records.ContainsKey(id))
-                    records[id] = record;
-                else
-                    records.Add(id, record);
-                if (Config.Ping)
+                StatisticsRecord record = kv.Value.UpdateRecord();
+
+                if (record != null && !record.IsEmpty)
                 {
-                    MyPing ping = new MyPing(server, Repeat);
-                    ping.Completed += ping_Completed;
-                    ping.Start(new PingState { state = state, record = record });
-                }
-                else if (!record.IsEmptyData())
-                {
-                    AppendRecord(id, record);
+                    if (_config.Ping)
+                    {
+                        MyPing ping = new MyPing(kv.Value.server, _config.RepeatTimesNum);
+                        ping.Completed += ping_Completed;
+                        ping.Start(record);
+                    }
+                    else
+                    {
+                        records.Add(record);
+                    }
                 }
             }
 
-            if (!Config.Ping)
+            if(records.Count > 0)
             {
-                Save();
-                FilterRawStatistics();
+                Save(records);
             }
         }
 
         private void ping_Completed(object sender, MyPing.CompletedEventArgs e)
         {
-            PingState pingState = (PingState)e.UserState;
-            UpdateRecordsState state = pingState.state;
             Server server = e.Server;
-            StatisticsRecord record = pingState.record;
-            record.SetResponse(e.RoundtripTime);
-            if (!record.IsEmptyData())
+            StatisticsRecord record = (StatisticsRecord)e.UserState;
+            if (e.Error == null)
             {
-                AppendRecord(server.Identifier(), record);
+                record.SetResponse(e.RoundtripTime);
+                Logging.Debug($"Ping {server.FriendlyName()} {e.RoundtripTime.Count} times, {(100 - record.ping.LossPercent * 100)}% packages loss, min {record.ping.Min} ms, max {record.ping.Max} ms, avg {record.ping.Average} ms");
             }
-            Logging.Debug($"Ping {server.FriendlyName()} {e.RoundtripTime.Count} times, {(100 - record.PackageLoss * 100)}% packages loss, min {record.MinResponse} ms, max {record.MaxResponse} ms, avg {record.AverageResponse} ms");
-            if (Interlocked.Decrement(ref state.counter) == 0)
+            if (!record.IsEmpty)
             {
-                Save();
-                FilterRawStatistics();
+                Save(record);
             }
         }
 
-        private void AppendRecord(string serverIdentifier, StatisticsRecord record)
+        private const string AvailabilityStatisticsFileHeader = "Timestamp,Server Identifier,Latency Average,Min Latency,Max Latency,Inbound Average Speed(KiB/S),Min Inbound Speed(KiB/S),Max Inbound Speed(KiB/S),Outbound Average Speed(KiB/S),Min Outbound Speed(KiB/S),Max Outbound Speed(KiB/S),Ping Times,Loss,Loss(%),Average Response(ms),Min Response(ms),Max Response(ms)";
+
+        private void LoadStatisticsGroups()
         {
             try
             {
-                List<StatisticsRecord> records;
-                lock (RawStatistics)
-                {
-                    if (!RawStatistics.TryGetValue(serverIdentifier, out records))
-                    {
-                        records = new List<StatisticsRecord>();
-                        RawStatistics[serverIdentifier] = records;
-                    }
-                }
-                records.Add(record);
+                var path = AvailabilityStatisticsFile + ".group.json";
+                if (!File.Exists(path))
+                    return;
+                var content = File.ReadAllText(path);
+                _serverStatisticsGroups = JsonConvert.DeserializeObject<ConcurrentDictionary<string, StatisticsGroup>>(content);
             }
             catch (Exception e)
             {
                 Logging.LogUsefulException(e);
             }
+            finally
+            {
+                _serverStatisticsGroups = new ConcurrentDictionary<string, StatisticsGroup>();
+            }
         }
 
-        private void Save()
+        private void SaveStatisticsGroups()
         {
-            Logging.Debug($"save statistics to {AvailabilityStatisticsFile}");
-            if (RawStatistics.Count == 0)
-            {
-                return;
-            }
             try
             {
-                string content;
-#if DEBUG
-                content = JsonConvert.SerializeObject(RawStatistics, Formatting.Indented);
-#else
-                content = JsonConvert.SerializeObject(RawStatistics, Formatting.None);
-#endif
-                File.WriteAllText(AvailabilityStatisticsFile, content);
+                string content = JsonConvert.SerializeObject(_serverStatisticsGroups, Formatting.Indented);
+                File.WriteAllText(AvailabilityStatisticsFile + ".group.json", content);
             }
             catch (IOException e)
             {
@@ -246,112 +209,55 @@ namespace Shadowsocks.Controller
             }
         }
 
-        private bool IsValidRecord(StatisticsRecord record)
+        private void Save(StatisticsRecord record)
         {
-            if (Config.ByHourOfDay)
-            {
-                if (!record.Timestamp.Hour.Equals(DateTime.Now.Hour)) return false;
-            }
-            return true;
-        }
-
-        private void FilterRawStatistics()
-        {
+            Logging.Debug($"save statistics to {AvailabilityStatisticsFile}");
+            if (record == null)
+                return;
             try
             {
-                Logging.Debug("filter raw statistics");
-                if (RawStatistics == null) return;
-                if (FilteredStatistics == null)
+                StatisticsGroup group = _serverStatisticsGroups.GetOrAdd(record.ServerIdentifier, (k) => new StatisticsGroup());
+                group.Update(record);
+                SaveStatisticsGroups();
+                StringBuilder content = new StringBuilder();
+                if (!File.Exists(AvailabilityStatisticsFile))
                 {
-                    FilteredStatistics = new Statistics();
+                    content.AppendLine(AvailabilityStatisticsFileHeader);
                 }
-
-                foreach (var serverAndRecords in RawStatistics)
-                {
-                    var server = serverAndRecords.Key;
-                    var filteredRecords = serverAndRecords.Value.FindAll(IsValidRecord);
-                    FilteredStatistics[server] = filteredRecords;
-                }
+                content.AppendLine(record.ToCSVLine());
+                File.AppendAllText(AvailabilityStatisticsFile, content.ToString());
             }
-            catch (Exception e)
+            catch (IOException e)
             {
                 Logging.LogUsefulException(e);
             }
         }
 
-        private void LoadRawStatistics()
+        private void Save(List<StatisticsRecord> records)
         {
+            Logging.Debug($"save statistics to {AvailabilityStatisticsFile}");
+            if (records.Count == 0)
+                return;
             try
             {
-                var path = AvailabilityStatisticsFile;
-                Logging.Debug($"loading statistics from {path}");
-                if (!File.Exists(path))
+                StringBuilder content = new StringBuilder();
+                if (!File.Exists(AvailabilityStatisticsFile))
                 {
-                    using (File.Create(path))
-                    {
-                        //do nothing
-                    }
+                    content.AppendLine(AvailabilityStatisticsFileHeader);
                 }
-                var content = File.ReadAllText(path);
-                RawStatistics = JsonConvert.DeserializeObject<Statistics>(content) ?? RawStatistics;
+                foreach (StatisticsRecord record in records)
+                {
+                    content.AppendLine(record.ToCSVLine());
+                    StatisticsGroup group = _serverStatisticsGroups.GetOrAdd(record.ServerIdentifier, (k) => new StatisticsGroup());
+                    group.Update(record);
+                }
+                File.AppendAllText(AvailabilityStatisticsFile, content.ToString());
+                SaveStatisticsGroups();
             }
-            catch (Exception e)
+            catch (IOException e)
             {
                 Logging.LogUsefulException(e);
-                Console.WriteLine($"failed to load statistics; try to reload {_retryInterval.TotalMinutes} minutes later");
-                _recorder.Change(_retryInterval, RecordingInterval);
             }
-        }
-
-        private static int GetSpeedInKiBPerSecond(long bytes, double seconds)
-        {
-            var result = (int)(bytes / seconds) / 1024;
-            return result;
-        }
-
-        public void Dispose()
-        {
-            _recorder.Dispose();
-            _speedMonior.Dispose();
-        }
-
-        public void UpdateLatency(Server server, int latency)
-        {
-            _latencyRecords.GetOrAdd(server.Identifier(), (k) =>
-            {
-                List<int> records = new List<int>();
-                records.Add(latency);
-                return records;
-            });
-        }
-
-        public void UpdateInboundCounter(Server server, long n)
-        {
-            _inboundCounter.AddOrUpdate(server.Identifier(), (k) =>
-            {
-                _lastInboundCounter.GetOrAdd(server.Identifier(), 0);
-                return n;
-            }, (k, v) => (v + n));
-        }
-
-        public void UpdateOutboundCounter(Server server, long n)
-        {
-            _outboundCounter.AddOrUpdate(server.Identifier(), (k) =>
-            {
-                _lastOutboundCounter.GetOrAdd(server.Identifier(), 0);
-                return n;
-            }, (k, v) => (v + n));
-        }
-
-        class UpdateRecordsState
-        {
-            public int counter;
-        }
-
-        class PingState
-        {
-            public UpdateRecordsState state;
-            public StatisticsRecord record;
         }
 
         class MyPing

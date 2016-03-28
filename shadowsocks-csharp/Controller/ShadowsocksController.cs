@@ -29,8 +29,8 @@ namespace Shadowsocks.Controller
         private StrategyManager _strategyManager;
         private PolipoRunner polipoRunner;
         private GFWListUpdater gfwListUpdater;
-        public AvailabilityStatistics availabilityStatistics = AvailabilityStatistics.Instance;
-        public StatisticsStrategyConfiguration StatisticsConfiguration { get; private set; }
+        public AvailabilityStatistics availabilityStatistics;
+        private StatisticsStrategyConfiguration statisticsStrategyConfig;
 
         public long inboundCounter = 0;
         public long outboundCounter = 0;
@@ -62,7 +62,8 @@ namespace Shadowsocks.Controller
         public ShadowsocksController()
         {
             _config = Configuration.Load();
-            StatisticsConfiguration = StatisticsStrategyConfiguration.Load();
+            availabilityStatistics = AvailabilityStatistics.Instance;
+            statisticsStrategyConfig = StatisticsStrategyConfiguration.Load();
             _strategyManager = new StrategyManager(this);
             StartReleasingMemory();
         }
@@ -95,6 +96,11 @@ namespace Shadowsocks.Controller
         public Configuration GetCurrentConfiguration()
         {
             return _config;
+        }
+
+        public StatisticsStrategyConfiguration GetCurrentStatisticsStrategyConfiguration()
+        {
+            return statisticsStrategyConfig;
         }
 
         public IList<IStrategy> GetStrategies()
@@ -137,7 +143,7 @@ namespace Shadowsocks.Controller
 
         public void SaveStrategyConfigurations(StatisticsStrategyConfiguration configuration)
         {
-            StatisticsConfiguration = configuration;
+            statisticsStrategyConfig = configuration;
             StatisticsStrategyConfiguration.Save(configuration);
         }
 
@@ -336,7 +342,7 @@ namespace Shadowsocks.Controller
         {
             // some logic in configuration updated the config when saving, we need to read it again
             _config = Configuration.Load();
-            StatisticsConfiguration = StatisticsStrategyConfiguration.Load();
+            statisticsStrategyConfig = StatisticsStrategyConfiguration.Load();
 
             if (polipoRunner == null)
             {

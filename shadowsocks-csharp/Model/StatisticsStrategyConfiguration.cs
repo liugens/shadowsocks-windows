@@ -19,6 +19,9 @@ namespace Shadowsocks.Model
         public bool Ping { get; set; }
         public int ChoiceKeptMinutes { get; set; } = 10;
         public int DataCollectionMinutes { get; set; } = 10;
+        /// <summary>
+        /// Ping repeat times
+        /// </summary>
         public int RepeatTimesNum { get; set; } = 4;
 
         private const string ConfigFile = "statistics-config.json";

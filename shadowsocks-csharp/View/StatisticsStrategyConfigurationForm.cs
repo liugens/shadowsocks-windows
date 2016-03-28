@@ -37,8 +37,7 @@ namespace Shadowsocks.View
         {
             var configs = _controller.GetCurrentConfiguration().configs;
             _servers = configs.Select(server => server.Identifier()).ToList();
-            _configuration = _controller.StatisticsConfiguration
-                             ?? new StatisticsStrategyConfiguration();
+            _configuration = _controller.GetCurrentStatisticsStrategyConfiguration();
             if (_configuration.Calculations == null)
             {
                 _configuration = new StatisticsStrategyConfiguration();
@@ -96,42 +95,42 @@ namespace Shadowsocks.View
             _dataTable.Rows.Clear();
 
             //return directly when no data is usable
-            if (_controller.availabilityStatistics?.FilteredStatistics == null) return;
-            List<StatisticsRecord> statistics;
-            if (!_controller.availabilityStatistics.FilteredStatistics.TryGetValue(serverName, out statistics)) return;
-            IEnumerable<IGrouping<int, StatisticsRecord>> dataGroups;
-            if (allMode.Checked)
-            {
-                _pingSeries.XValueType = ChartValueType.DateTime;
-                _packageLossSeries.XValueType = ChartValueType.DateTime;
-                _speedSeries.XValueType = ChartValueType.DateTime;
-                dataGroups = statistics.GroupBy(data => data.Timestamp.DayOfYear);
-                StatisticsChart.ChartAreas["DataArea"].AxisX.LabelStyle.Format = "g";
-                StatisticsChart.ChartAreas["DataArea"].AxisX2.LabelStyle.Format = "g";
-            }
-            else
-            {
-                _pingSeries.XValueType = ChartValueType.Time;
-                _packageLossSeries.XValueType = ChartValueType.Time;
-                _speedSeries.XValueType = ChartValueType.Time;
-                dataGroups = statistics.GroupBy(data => data.Timestamp.Hour);
-                StatisticsChart.ChartAreas["DataArea"].AxisX.LabelStyle.Format = "HH:00";
-                StatisticsChart.ChartAreas["DataArea"].AxisX2.LabelStyle.Format = "HH:00";
-            }
-            var finalData = from dataGroup in dataGroups
-                            orderby dataGroup.Key
-                            select new
-                            {
-                                dataGroup.First().Timestamp,
-                                Speed = dataGroup.Max(data => data.MaxInboundSpeed) ?? 0,
-                                Ping = (int) (dataGroup.Average(data => data.AverageResponse) ?? 0),
-                                PackageLossPercentage = (int) (dataGroup.Average(data => data.PackageLoss) ?? 0) * 100
-                            };
-            foreach (var data in finalData.Where(data => data.Speed != 0 || data.PackageLossPercentage != 0 || data.Ping != 0))
-            {
-                _dataTable.Rows.Add(data.Timestamp, data.Speed, data.PackageLossPercentage, data.Ping);
-            }
-            StatisticsChart.DataBind();
+            /*if (_controller.availabilityStatistics?.FilteredStatistics == null) */return;
+            //List<StatisticsRecord> statistics;
+            //if (!_controller.availabilityStatistics.FilteredStatistics.TryGetValue(serverName, out statistics)) return;
+            //IEnumerable<IGrouping<int, StatisticsRecord>> dataGroups;
+            //if (allMode.Checked)
+            //{
+            //    _pingSeries.XValueType = ChartValueType.DateTime;
+            //    _packageLossSeries.XValueType = ChartValueType.DateTime;
+            //    _speedSeries.XValueType = ChartValueType.DateTime;
+            //    dataGroups = statistics.GroupBy(data => data.Timestamp.DayOfYear);
+            //    StatisticsChart.ChartAreas["DataArea"].AxisX.LabelStyle.Format = "g";
+            //    StatisticsChart.ChartAreas["DataArea"].AxisX2.LabelStyle.Format = "g";
+            //}
+            //else
+            //{
+            //    _pingSeries.XValueType = ChartValueType.Time;
+            //    _packageLossSeries.XValueType = ChartValueType.Time;
+            //    _speedSeries.XValueType = ChartValueType.Time;
+            //    dataGroups = statistics.GroupBy(data => data.Timestamp.Hour);
+            //    StatisticsChart.ChartAreas["DataArea"].AxisX.LabelStyle.Format = "HH:00";
+            //    StatisticsChart.ChartAreas["DataArea"].AxisX2.LabelStyle.Format = "HH:00";
+            //}
+            //var finalData = from dataGroup in dataGroups
+            //                orderby dataGroup.Key
+            //                select new
+            //                {
+            //                    dataGroup.First().Timestamp,
+            //                    Speed = dataGroup.Max(data => data.MaxInboundSpeed) ?? 0,
+            //                    Ping = (int) (dataGroup.Average(data => data.AverageResponse) ?? 0),
+            //                    PackageLossPercentage = (int) (dataGroup.Average(data => data.PackageLoss) ?? 0) * 100
+            //                };
+            //foreach (var data in finalData.Where(data => data.Speed != 0 || data.PackageLossPercentage != 0 || data.Ping != 0))
+            //{
+            //    _dataTable.Rows.Add(data.Timestamp, data.Speed, data.PackageLossPercentage, data.Ping);
+            //}
+            //StatisticsChart.DataBind();
         }
 
         private void serverSelector_SelectionChangeCommitted(object sender, EventArgs e)

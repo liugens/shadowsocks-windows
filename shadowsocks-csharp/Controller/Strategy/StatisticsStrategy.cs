@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
 using System.Net;
@@ -17,14 +18,15 @@ namespace Shadowsocks.Controller.Strategy
         private readonly ShadowsocksController _controller;
         private Server _currentServer;
         private readonly Timer _timer;
-        private Statistics _filteredStatistics;
         private AvailabilityStatistics Service => _controller.availabilityStatistics;
-        private int ChoiceKeptMilliseconds
-            => (int)TimeSpan.FromMinutes(_controller.StatisticsConfiguration.ChoiceKeptMinutes).TotalMilliseconds;
+        StatisticsStrategyConfiguration config;
+        private int ChoiceKeptMilliseconds;
 
         public StatisticsStrategy(ShadowsocksController controller)
         {
             _controller = controller;
+            config = _controller.GetCurrentStatisticsStrategyConfiguration();
+            ChoiceKeptMilliseconds = (int)TimeSpan.FromMinutes(config.ChoiceKeptMinutes).TotalMilliseconds;
             var servers = controller.GetCurrentConfiguration().configs;
             var randomIndex = new Random().Next() % servers.Count;
             _currentServer = servers[randomIndex];  //choose a server randomly at first
@@ -35,75 +37,81 @@ namespace Shadowsocks.Controller.Strategy
         {
             Logging.Debug("Reloading statistics and choose a new server....");
             var servers = _controller.GetCurrentConfiguration().configs;
-            LoadStatistics();
             ChooseNewServer(servers);
         }
 
-        private void LoadStatistics()
+        class ServerScore
         {
-            _filteredStatistics =
-                Service.FilteredStatistics ??
-                Service.RawStatistics ??
-                _filteredStatistics;
+            public Server server;
+            public float score;
         }
 
         //return the score by data
         //server with highest score will be choosen
-        private float? GetScore(string identifier, List<StatisticsRecord> records)
+        //private float? GetScore(string identifier, List<StatisticsRecord> records)
+        //{
+        //    StatisticsStrategyConfiguration config = _controller.GetCurrentStatisticsStrategyConfiguration();
+
+        //    float? score = null;
+
+        //    var averageRecord = new StatisticsRecord(identifier,
+        //        records.Where(record => record.MaxInboundSpeed != null).Select(record => record.MaxInboundSpeed.Value).ToList(),
+        //        records.Where(record => record.MaxOutboundSpeed != null).Select(record => record.MaxOutboundSpeed.Value).ToList(),
+        //        records.Where(record => record.AverageLatency != null).Select(record => record.AverageLatency.Value).ToList());
+        //    averageRecord.SetResponse(records.Select(record => record.AverageResponse).ToList());
+
+        //    foreach (var calculation in config.Calculations)
+        //    {
+        //        var name = calculation.Key;
+        //        var field = typeof (StatisticsRecord).GetField(name);
+        //        dynamic value = field?.GetValue(averageRecord);
+        //        var factor = calculation.Value;
+        //        if (value == null || factor.Equals(0)) continue;
+        //        score = score ?? 0;
+        //        score += value * factor;
+        //    }
+
+        //    if (score != null)
+        //    {
+        //        Logging.Debug($"Highest score: {score} {JsonConvert.SerializeObject(averageRecord, Formatting.Indented)}");
+        //    }
+        //    return score;
+        //}
+
+        private ServerScore GetScore(Server server)
         {
-            var config = _controller.StatisticsConfiguration;
-            float? score = null;
-
-            var averageRecord = new StatisticsRecord(identifier,
-                records.Where(record => record.MaxInboundSpeed != null).Select(record => record.MaxInboundSpeed.Value).ToList(),
-                records.Where(record => record.MaxOutboundSpeed != null).Select(record => record.MaxOutboundSpeed.Value).ToList(),
-                records.Where(record => record.AverageLatency != null).Select(record => record.AverageLatency.Value).ToList());
-            averageRecord.SetResponse(records.Select(record => record.AverageResponse).ToList());
-
-            foreach (var calculation in config.Calculations)
+            ConcurrentDictionary<string, StatisticsGroup> serverStatisticsGroups = Service._serverStatisticsGroups;
+            StatisticsGroup group;
+            ServerScore score = null;
+            if (serverStatisticsGroups.TryGetValue(server.Identifier(), out group))
             {
-                var name = calculation.Key;
-                var field = typeof (StatisticsRecord).GetField(name);
-                dynamic value = field?.GetValue(averageRecord);
-                var factor = calculation.Value;
-                if (value == null || factor.Equals(0)) continue;
-                score = score ?? 0;
-                score += value * factor;
-            }
-
-            if (score != null)
-            {
-                Logging.Debug($"Highest score: {score} {JsonConvert.SerializeObject(averageRecord, Formatting.Indented)}");
+                score = new ServerScore { server = server, score = .0F };
+                //TODO:
             }
             return score;
         }
 
         private void ChooseNewServer(List<Server> servers)
         {
-            if (_filteredStatistics == null || servers.Count == 0)
-            {
-                return;
-            }
             try
             {
-                var serversWithStatistics = (from server in servers
-                    let id = server.Identifier()
-                    where _filteredStatistics.ContainsKey(id)
-                    let score = GetScore(server.Identifier(), _filteredStatistics[server.Identifier()])
-                    where score != null
-                    select new
+                List<ServerScore> list = new List<ServerScore>(servers.Count);
+                foreach(Server server in servers)
+                {
+                    ServerScore score = GetScore(server);
+                    if (score != null)
                     {
-                        server,
-                        score
-                    }).ToArray();
+                        list.Add(score);
+                    }
+                }
 
-                if (serversWithStatistics.Length < 2)
+                if (list.Count < 2)
                 {
                     LogWhenEnabled("no enough statistics data or all factors in calculations are 0");
                     return;
                 }
 
-                var bestResult = serversWithStatistics
+                var bestResult = list
                     .Aggregate((server1, server2) => server1.score > server2.score ? server1 : server2);
 
                 LogWhenEnabled($"Switch to server: {bestResult.server.FriendlyName()} by statistics: score {bestResult.score}");
@@ -138,6 +146,8 @@ namespace Shadowsocks.Controller.Strategy
 
         public void ReloadServers()
         {
+            config = _controller.GetCurrentStatisticsStrategyConfiguration();
+            ChoiceKeptMilliseconds = (int)TimeSpan.FromMinutes(config.ChoiceKeptMinutes).TotalMilliseconds;
             ChooseNewServer(_controller.GetCurrentConfiguration().configs);
             _timer?.Change(0, ChoiceKeptMilliseconds);
         }
